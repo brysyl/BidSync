@@ -1,0 +1,120 @@
+# ==============================================================================
+# BidSync Production Multi-Container Orchestration Setup
+# Optimized for Vultr VPS (Cloud Compute / High Frequency) & Coolify / Traefik
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # 1. Frontend Web Service (Next.js / Vite React Dashboard)
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: bidsync-web
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NEXT_PUBLIC_API_URL=http://api:8000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - VULTR_SERVERLESS_INFERENCE_API_KEY=${VULTR_SERVERLESS_INFERENCE_API_KEY}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - bidsync-net
+    labels:
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.bidsync-web.rule=Host(`bidsync.${DOMAIN:-vultr.internal}`)"
+      - "traefik.http.services.bidsync-web.loadbalancer.server.port=3000"
+
+  # 2. Orchestration Backend (Python FastAPI Multi-Agent Engine)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: bidsync-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-bidsync_user}:${POSTGRES_PASSWORD:-securepassword}@db:5432/${POSTGRES_DB:-bidsync_db}
+      - REDIS_URL=redis://redis:6379/0
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - VULTR_SERVERLESS_INFERENCE_API_KEY=${VULTR_SERVERLESS_INFERENCE_API_KEY}
+      - VULTR_INFERENCE_ENDPOINT=https://api.vultrinference.com/v1/chat/completions
+      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_SERVER_PORT=8001
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - bidsync-net
+    labels:
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.bidsync-api.rule=Host(`api.bidsync.${DOMAIN:-vultr.internal}`)"
+      - "traefik.http.services.bidsync-api.loadbalancer.server.port=8000"
+
+  # 3. Relational Database & Execution Logs (PostgreSQL 16)
+  db:
+    image: postgres:16-alpine
+    container_name: bidsync-postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-bidsync_db}
+      - POSTGRES_USER=${POSTGRES_USER:-bidsync_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-securepassword}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bidsync_user} -d ${POSTGRES_DB:-bidsync_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bidsync-net
+
+  # 4. Redis Task Queue & Persistent State Machine
+  redis:
+    image: redis:7-alpine
+    container_name: bidsync-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-bidsync_redis_pass}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-bidsync_redis_pass}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bidsync-net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  bidsync-net:
+    driver: bridge

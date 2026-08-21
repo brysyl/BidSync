@@ -1,0 +1,6 @@
+{
+  "name": "BidSync",
+  "description": "Multi-agent B2B procurement and RFP negotiation platform with Gemini 3 Pro reasoning, Vultr Serverless inference, MCP tool pricing benchmarks, and cryptographically verified contract generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
